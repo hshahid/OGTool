@@ -1,85 +1,68 @@
-import argparse
+#!/usr/bin/env python3
+"""
+Main entry point for the web scraper.
+Takes team_id, user_id, and URLs as input and orchestrates the scraping process.
+"""
+
+import asyncio
 import json
-import os
-from typing import List
-from scrapers.base import BaseScraper, ContentItem
-from scrapers.web import WebScraper
-from scrapers.pdf import PDFScraper
+import sys
+from typing import List, Dict, Any
+from scraper import WebScraper
+from url_processor import URLProcessor
+from output_formatter import OutputFormatter
 
-def get_scraper(source: str, team_id: str, **kwargs) -> BaseScraper:
-    """Get the appropriate scraper for the given source"""
-    # Only pass relevant arguments to each scraper
-    web_kwargs = {k: kwargs[k] for k in ['max_pages', 'delay', 'max_concurrent', 'use_async'] if k in kwargs}
-    pdf_kwargs = {k: kwargs[k] for k in ['chunk_size'] if k in kwargs}
-    scrapers = [
-        WebScraper(team_id, **web_kwargs),
-        PDFScraper(team_id, **pdf_kwargs)
-    ]
-    
-    for scraper in scrapers:
-        if scraper.can_handle(source):
-            return scraper
-    
-    return None
 
-def main():
-    parser = argparse.ArgumentParser(description='High-performance content scraper for knowledge base')
-    parser.add_argument('sources', nargs='+', help='URLs or file paths to scrape')
-    parser.add_argument('--team-id', default='default_team', help='Team ID for the output')
-    parser.add_argument('--max-pages', type=int, default=50, help='Maximum number of pages to scrape')
-    parser.add_argument('--delay', type=float, default=1.0, help='Delay between requests (seconds)')
-    parser.add_argument('--max-concurrent', type=int, default=10, help='Maximum concurrent requests (async mode)')
-    parser.add_argument('--no-async', action='store_true', help='Disable async mode (use synchronous scraping)')
-    parser.add_argument('--chunk-size', type=int, default=5000, help='Chunk size for PDF splitting')
-    parser.add_argument('--output', default='results.json', help='Output JSON file path')
+async def main():
+    """Main function to orchestrate the scraping process."""
+    if len(sys.argv) < 4:
+        print("Usage: python main.py <team_id> <user_id> <url1> [url2] [url3] ...")
+        sys.exit(1)
     
-    args = parser.parse_args()
+    team_id = sys.argv[1]
+    user_id = sys.argv[2]
+    urls = sys.argv[3:]
     
-    all_items: List[ContentItem] = []
+    print(f"Starting scrape for team: {team_id}, user: {user_id}")
+    print(f"URLs to process: {len(urls)}")
     
-    for source in args.sources:
-        print(f"\nProcessing source: {source}")
-        
-        scraper = get_scraper(
-            source,
-            args.team_id,
-            max_pages=args.max_pages,
-            delay=args.delay,
-            max_concurrent=args.max_concurrent,
-            use_async=not args.no_async,
-            chunk_size=args.chunk_size
-        )
-        
-        if not scraper:
-            print(f"No suitable scraper found for: {source}")
-            continue
-            
-        items = scraper.scrape(source)
-        all_items.extend(items)
-        print(f"Found {len(items)} items from {source}")
+    # Initialize components
+    url_processor = URLProcessor(max_pages=1)  # Limit to 1 page deep
+    scraper = WebScraper()
+    formatter = OutputFormatter()
     
-    # Convert to final format
-    output = {
-        "team_id": args.team_id,
-        "items": [
-            {
-                "title": item.title,
-                "content": item.content,
-                "content_type": item.content_type,
-                "source_url": item.source_url,
-                "author": item.author,
-                "user_id": item.user_id
-            }
-            for item in all_items
-        ]
-    }
+    # Process URLs to get individual page URLs
+    all_page_urls = []
+    for url in urls:
+        print(f"Processing URL: {url}")
+        page_urls = await url_processor.process_url(url)
+        all_page_urls.extend(page_urls)
+        print(f"Found {len(page_urls)} individual pages")
+    
+    print(f"Total pages to scrape: {len(all_page_urls)}")
+    
+    # Scrape all pages
+    scraped_items = []
+    for i, url in enumerate(all_page_urls, 1):
+        print(f"Scraping {i}/{len(all_page_urls)}: {url}")
+        try:
+            item = await scraper.scrape_page(url, user_id)
+            if item:
+                scraped_items.append(item)
+        except Exception as e:
+            print(f"Error scraping {url}: {e}")
+    
+    # Format output
+    output = formatter.format_output(team_id, scraped_items)
     
     # Save to file
-    with open(args.output, 'w', encoding='utf-8') as f:
+    output_file = f"scraped_data_{team_id}_{user_id}.json"
+    with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
     
-    print(f"\nProcessing complete! Found {len(all_items)} total items")
-    print(f"Results saved to: {args.output}")
+    print(f"Scraping completed! Found {len(scraped_items)} items")
+    print(f"Output saved to: {output_file}")
+
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main())
