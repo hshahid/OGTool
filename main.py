@@ -9,7 +9,7 @@ from scrapers.pdf import PDFScraper
 def get_scraper(source: str, team_id: str, **kwargs) -> BaseScraper:
     """Get the appropriate scraper for the given source"""
     # Only pass relevant arguments to each scraper
-    web_kwargs = {k: kwargs[k] for k in ['max_pages', 'delay'] if k in kwargs}
+    web_kwargs = {k: kwargs[k] for k in ['max_pages', 'delay', 'max_concurrent', 'use_async'] if k in kwargs}
     pdf_kwargs = {k: kwargs[k] for k in ['chunk_size'] if k in kwargs}
     scrapers = [
         WebScraper(team_id, **web_kwargs),
@@ -23,11 +23,13 @@ def get_scraper(source: str, team_id: str, **kwargs) -> BaseScraper:
     return None
 
 def main():
-    parser = argparse.ArgumentParser(description='Content scraper for knowledge base')
+    parser = argparse.ArgumentParser(description='High-performance content scraper for knowledge base')
     parser.add_argument('sources', nargs='+', help='URLs or file paths to scrape')
     parser.add_argument('--team-id', default='default_team', help='Team ID for the output')
     parser.add_argument('--max-pages', type=int, default=50, help='Maximum number of pages to scrape')
     parser.add_argument('--delay', type=float, default=1.0, help='Delay between requests (seconds)')
+    parser.add_argument('--max-concurrent', type=int, default=10, help='Maximum concurrent requests (async mode)')
+    parser.add_argument('--no-async', action='store_true', help='Disable async mode (use synchronous scraping)')
     parser.add_argument('--chunk-size', type=int, default=5000, help='Chunk size for PDF splitting')
     parser.add_argument('--output', default='results.json', help='Output JSON file path')
     
@@ -43,6 +45,8 @@ def main():
             args.team_id,
             max_pages=args.max_pages,
             delay=args.delay,
+            max_concurrent=args.max_concurrent,
+            use_async=not args.no_async,
             chunk_size=args.chunk_size
         )
         
