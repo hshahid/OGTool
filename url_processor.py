@@ -69,11 +69,15 @@ class URLProcessor:
         print(f"Debug: HTML extraction found {len(html_urls)} URLs")
         urls.update(html_urls)
         
-        # Always try JavaScript for listing pages to catch dynamic content
-        print(f"Debug: Trying JavaScript extraction for {url}")
-        js_urls = await self._extract_urls_javascript(url)
-        print(f"Debug: JavaScript extraction found {len(js_urls)} URLs")
-        urls.update(js_urls)
+        # Only try JavaScript if HTML extraction found very few URLs (less than 5)
+        # This avoids unnecessary JavaScript extraction when HTML already works
+        if len(html_urls) < 5:
+            print(f"Debug: HTML extraction found few URLs, trying JavaScript extraction for {url}")
+            js_urls = await self._extract_urls_javascript(url)
+            print(f"Debug: JavaScript extraction found {len(js_urls)} URLs")
+            urls.update(js_urls)
+        else:
+            print(f"Debug: HTML extraction found sufficient URLs ({len(html_urls)}), skipping JavaScript extraction")
         
         # Handle pagination
         paginated_urls = await self._handle_pagination(url, urls)
