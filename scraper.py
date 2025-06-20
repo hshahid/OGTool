@@ -433,6 +433,8 @@ class WebScraper:
                             data = self._parse_html(html, new_url)
                             if data and data.get('content'):
                                 print(f"    ✓ Content extracted: {len(data.get('content', ''))} chars")
+                                # Clean and format the content
+                                data['content'] = self._clean_content(data['content'])
                                 data['source_url'] = new_url
                                 data['user_id'] = user_id
                                 data['content_type'] = 'blog'
@@ -492,6 +494,8 @@ class WebScraper:
                 data = self._parse_html(html, url)
                 if not data or not data.get('content'):
                     return None
+                # Clean and format the content
+                data['content'] = self._clean_content(data['content'])
                 data['source_url'] = url
                 data['user_id'] = user_id
                 data['content_type'] = 'blog'
