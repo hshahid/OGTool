@@ -29,6 +29,12 @@ async def test_scraper():
     page_urls = await url_processor.process_url(test_url)
     print(f"Found {len(page_urls)} individual pages")
     
+    # Debug: Show the URLs that were found
+    print("Extracted URLs:")
+    for i, url in enumerate(page_urls, 1):
+        print(f"  {i}. {url}")
+    print()
+    
     # Limit to first 3 pages for testing
     test_urls = page_urls
     
@@ -37,10 +43,14 @@ async def test_scraper():
     for i, url in enumerate(test_urls, 1):
         print(f"Scraping {i}/{len(test_urls)}: {url}")
         try:
-            item = await scraper.scrape_page(url, "test_user")
-            if item:
-                scraped_items.append(item)
-                print(f"  ✓ Success: {item.get('title', 'No title')[:50]}...")
+            # Use the new method that can return multiple items
+            items = await scraper.scrape_listing_page(url, "test_user")
+            if items:
+                scraped_items.extend(items)
+                print(f"  ✓ Success: Found {len(items)} items")
+                for j, item in enumerate(items, 1):
+                    title = item.get('title', 'No title')[:50]
+                    print(f"    {j}. {title}...")
             else:
                 print(f"  ✗ No content found")
         except Exception as e:

@@ -64,13 +64,16 @@ class URLProcessor:
         urls = set()
         
         # Try HTML first
+        print(f"Debug: Trying HTML extraction for {url}")
         html_urls = await self._extract_urls_html(url)
+        print(f"Debug: HTML extraction found {len(html_urls)} URLs")
         urls.update(html_urls)
         
-        # If no URLs found, try JavaScript
-        if not urls:
-            js_urls = await self._extract_urls_javascript(url)
-            urls.update(js_urls)
+        # Always try JavaScript for listing pages to catch dynamic content
+        print(f"Debug: Trying JavaScript extraction for {url}")
+        js_urls = await self._extract_urls_javascript(url)
+        print(f"Debug: JavaScript extraction found {len(js_urls)} URLs")
+        urls.update(js_urls)
         
         # Handle pagination
         paginated_urls = await self._handle_pagination(url, urls)
@@ -99,19 +102,79 @@ class URLProcessor:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 page = await browser.new_page()
-                
-                await page.set_extra_http_headers({
-                    'User-Agent': USER_AGENT
-                })
-                
+                await page.set_extra_http_headers({'User-Agent': USER_AGENT})
                 await page.goto(url, wait_until='networkidle', timeout=REQUEST_TIMEOUT * 1000)
-                await page.wait_for_timeout(2000)
+                await page.wait_for_selector('a[href]')  # Wait for links to load
                 
-                html = await page.content()
+                # Wait a bit longer for dynamic content
+                await page.wait_for_timeout(3000)
+
+                # Debug: Check for different types of clickable elements
+                print(f"Debug: Checking for blog post links...")
+                
+                # Look for elements that might be blog post links
+                blog_links = await page.eval_on_selector_all(
+                    'a, [role="link"], [class*="post"], [class*="blog"], [class*="article"]',
+                    '''
+                    elements => elements.map(el => ({
+                        tag: el.tagName,
+                        href: el.href || null,
+                        text: el.textContent?.trim() || '',
+                        className: el.className || '',
+                        role: el.getAttribute('role') || null
+                    }))
+                    '''
+                )
+                
+                print(f"Debug: Found {len(blog_links)} potential link elements:")
+                for i, link in enumerate(blog_links[:10], 1):
+                    print(f"  {i}. {link['tag']} - href: {link['href']} - text: {link['text'][:50]}... - class: {link['className'][:30]}...")
+                
+                # Also check for any elements with blog-related text
+                blog_text_elements = await page.eval_on_selector_all(
+                    '*',
+                    '''
+                    elements => elements
+                        .filter(el => {
+                            const text = el.textContent?.trim() || '';
+                            return text.length > 10 && text.length < 200 && 
+                                   (text.includes('Read more') || text.includes('blog') || text.includes('post'));
+                        })
+                        .map(el => ({
+                            tag: el.tagName,
+                            text: el.textContent?.trim() || '',
+                            className: el.className || '',
+                            parentTag: el.parentElement?.tagName || null
+                        }))
+                    '''
+                )
+                
+                print(f"Debug: Found {len(blog_text_elements)} elements with blog-related text:")
+                for i, elem in enumerate(blog_text_elements[:5], 1):
+                    print(f"  {i}. {elem['tag']} - text: {elem['text'][:50]}... - class: {elem['className'][:30]}...")
+                
+                # Extract all hrefs from anchor tags
+                hrefs = await page.eval_on_selector_all(
+                    'a[href]',
+                    'elements => elements.map(el => el.href)'
+                )
                 await browser.close()
+
+                # Debug: Show all hrefs found
+                print(f"Debug: Found {len(hrefs)} total hrefs from {url}")
+                for i, href in enumerate(hrefs[:10], 1):  # Show first 10
+                    print(f"  {i}. {href}")
+                if len(hrefs) > 10:
+                    print(f"  ... and {len(hrefs) - 10} more")
+
+                # Filter and normalize URLs as needed
+                valid_urls = set()
+                for href in hrefs:
+                    if self._is_valid_content_url(href, url):
+                        valid_urls.add(href)
                 
-                return self._parse_urls_from_html(html, url)
-                
+                print(f"Debug: After filtering, {len(valid_urls)} valid URLs remain")
+                return valid_urls
         except Exception as e:
             print(f"JavaScript URL extraction failed for {url}: {e}")
             return set()

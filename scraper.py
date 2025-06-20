@@ -9,7 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from markdownify import markdownify
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import re
 from urllib.parse import urljoin, urlparse
 import time
@@ -34,9 +34,31 @@ class WebScraper:
         if self.session:
             await self.session.close()
     
+    async def scrape_listing_page(self, url: str, user_id: str) -> List[Dict[str, Any]]:
+        """Scrape a listing page and return all individual blog post items."""
+        try:
+            # Check if this is a listing page
+            if self._is_listing_page(url):
+                return await self._scrape_listing_page(url, user_id)
+            else:
+                # If not a listing page, scrape as single page
+                item = await self.scrape_page(url, user_id)
+                return [item] if item else []
+            
+        except Exception as e:
+            print(f"Error scraping listing page {url}: {e}")
+            return []
+    
     async def scrape_page(self, url: str, user_id: str) -> Optional[Dict[str, Any]]:
         """Scrape a single page and return structured data."""
         try:
+            # Check if this is a listing page
+            if self._is_listing_page(url):
+                items = await self._scrape_listing_page(url, user_id)
+                # For now, return the first item if there are multiple
+                # In the future, this could be modified to return all items
+                return items[0] if items else None
+            
             # Try simple HTML scraping first
             content = await self._scrape_html(url)
             
@@ -233,3 +255,248 @@ class WebScraper:
         content = re.sub(r'\n+$', '\n\n', content)
         
         return content 
+    
+    def _is_listing_page(self, url: str) -> bool:
+        """Determine if a URL is a listing page."""
+        url_lower = url.lower()
+        
+        # Common patterns for listing pages
+        listing_patterns = [
+            '/blog',
+            '/posts',
+            '/articles',
+            '/topics',
+            '/learn',
+            '/category',
+            '/tag',
+            '/archive',
+            '/search'
+        ]
+        
+        return any(pattern in url_lower for pattern in listing_patterns)
+    
+    async def _scrape_listing_page(self, url: str, user_id: str) -> List[Dict[str, Any]]:
+        """Scrape a listing page, simulate clicks on blog cards, and extract full content for each post."""
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                await page.set_extra_http_headers({'User-Agent': USER_AGENT})
+                await page.goto(url, wait_until='networkidle', timeout=REQUEST_TIMEOUT * 1000)
+                await page.wait_for_timeout(3000)  # Wait for dynamic content
+
+                # Try to remove any overlays that might be blocking clicks
+                try:
+                    await page.evaluate("""
+                        // Remove any gradient overlays that might block clicks
+                        document.querySelectorAll('div[class*="gradient"], div[class*="overlay"], div[style*="z-index"]').forEach(el => {
+                            if (el.style.zIndex > 1000 || el.className.includes('gradient')) {
+                                el.remove();
+                            }
+                        });
+                    """)
+                except Exception as e:
+                    print(f"    Note: Could not remove overlays: {e}")
+                
+                # Function to find blog cards
+                async def find_blog_cards():
+                    all_elements = await page.query_selector_all('a, button, div, article, section')
+                    cards = []
+                    
+                    for i, element in enumerate(all_elements):
+                        try:
+                            tag_name = await element.evaluate('el => el.tagName.toLowerCase()')
+                            text_content = await element.evaluate('el => el.textContent || ""')
+                            class_name = await element.evaluate('el => el.className || ""')
+                            
+                            # Check if this looks like a blog card
+                            is_clickable = (
+                                'cursor' in class_name or 
+                                'hover' in class_name or
+                                'click' in class_name or
+                                tag_name in ['a', 'button'] or
+                                await element.evaluate('el => el.onclick !== null || el.getAttribute("role") === "button"')
+                            )
+                            
+                            # Check if it has blog-like content
+                            has_blog_content = (
+                                any(word in text_content.lower() for word in ['blog', 'post', 'article', 'read', 'more']) or
+                                any(word in class_name.lower() for word in ['card', 'post', 'article', 'blog'])
+                            )
+                            
+                            if is_clickable and has_blog_content and len(text_content.strip()) > 50:
+                                cards.append({
+                                    'element': element,
+                                    'tag': tag_name,
+                                    'text': text_content[:100],
+                                    'class': class_name,
+                                    'text_key': text_content.strip()[:50]  # For deduplication
+                                })
+                        except Exception as e:
+                            continue
+                    
+                    # Remove duplicates based on text content
+                    seen_texts = set()
+                    unique_cards = []
+                    for card in cards:
+                        if card['text_key'] not in seen_texts:
+                            seen_texts.add(card['text_key'])
+                            unique_cards.append(card)
+                    
+                    return unique_cards
+                
+                # Initial card finding
+                card_selectors = await find_blog_cards()
+                print(f"Found {len(card_selectors)} unique clickable blog cards:")
+                for i, card in enumerate(card_selectors[:5], 1):  # Show first 5
+                    print(f"  {i}. {card['tag'].upper()} - {card['text'][:50]}...")
+                if len(card_selectors) > 5:
+                    print(f"  ... and {len(card_selectors) - 5} more")
+                
+                print(f"Processing {len(card_selectors)} elements...")
+                items = []
+                processed_urls = set()  # Track URLs we've already processed
+                processed_cards = set()  # Track which cards we've already clicked
+                
+                i = 0
+                while i < len(card_selectors):
+                    card = card_selectors[i]
+                    
+                    # Skip if we've already processed this card
+                    card_key = card['text_key']
+                    if card_key in processed_cards:
+                        print(f"  ⏭ Skipping card {i+1} (already processed)")
+                        i += 1
+                        continue
+                    
+                    print(f"  Attempting to click card {i+1}...")
+                    
+                    try:
+                        # Get current URL before click
+                        prev_url = page.url
+                        
+                        # Try to click with multiple strategies
+                        click_success = False
+                        for attempt in range(3):
+                            try:
+                                # Strategy 1: Direct click
+                                await card['element'].click(timeout=5000)
+                                click_success = True
+                                break
+                            except Exception as e1:
+                                try:
+                                    # Strategy 2: Click with force
+                                    await card['element'].click(force=True, timeout=5000)
+                                    click_success = True
+                                    break
+                                except Exception as e2:
+                                    try:
+                                        # Strategy 3: Use JavaScript click
+                                        await page.evaluate('el => el.click()', card['element'])
+                                        click_success = True
+                                        break
+                                    except Exception as e3:
+                                        if attempt == 2:  # Last attempt
+                                            print(f"    ✗ All click strategies failed: {e1}, {e2}, {e3}")
+                                        else:
+                                            await page.wait_for_timeout(1000)
+                        
+                        if not click_success:
+                            print(f"    ✗ Could not click card {i+1}")
+                            processed_cards.add(card_key)  # Mark as processed to avoid retrying
+                            i += 1  # Move to next card
+                            continue
+                        
+                        # Wait for navigation
+                        await page.wait_for_timeout(3000)
+                        new_url = page.url
+                        
+                        print(f"    ✓ Click successful")
+                        print(f"    URL before: {prev_url}")
+                        print(f"    URL after: {new_url}")
+                        
+                        # Only extract content if we actually navigated to a different page
+                        if new_url != prev_url and '/blog/' in new_url:
+                            # Check if we've already processed this URL
+                            if new_url in processed_urls:
+                                print(f"    ⚠ Already processed this URL, skipping...")
+                                processed_cards.add(card_key)  # Mark card as processed
+                                # Navigate back and move to next card
+                                await page.goto(url, wait_until='networkidle', timeout=REQUEST_TIMEOUT * 1000)
+                                await page.wait_for_timeout(2000)
+                                card_selectors = await find_blog_cards()
+                                i += 1  # Move to next card
+                                continue
+                            
+                            # Extract the full content and title
+                            html = await page.content()
+                            data = self._parse_html(html, new_url)
+                            if data and data.get('content'):
+                                print(f"    ✓ Content extracted: {len(data.get('content', ''))} chars")
+                                data['source_url'] = new_url
+                                data['user_id'] = user_id
+                                data['content_type'] = 'blog'
+                                data['author'] = data.get('author', '')
+                                items.append(data)
+                                processed_urls.add(new_url)  # Mark as processed
+                                processed_cards.add(card_key)  # Mark card as processed
+                            else:
+                                print(f"    ✗ No content found after click")
+                                processed_cards.add(card_key)  # Mark card as processed
+                            
+                            # Navigate back to the listing page
+                            print(f"    ↶ Navigating back to listing page...")
+                            await page.goto(url, wait_until='networkidle', timeout=REQUEST_TIMEOUT * 1000)
+                            await page.wait_for_timeout(2000)
+                            
+                            # Re-find the elements since we're back on the listing page
+                            card_selectors = await find_blog_cards()
+                            print(f"    ✓ Back on listing page, {len(card_selectors)} elements available")
+                            # Don't reset index - continue from where we left off
+                            i += 1
+                        else:
+                            print(f"    ⚠ No navigation detected or not a blog post URL")
+                            processed_cards.add(card_key)  # Mark card as processed
+                            i += 1  # Move to next card
+                        
+                    except Exception as e:
+                        print(f"    ✗ Error clicking card {i+1}: {e}")
+                        processed_cards.add(card_key)  # Mark card as processed
+                        # If there was an error, try to re-find elements in case we're on a different page
+                        try:
+                            card_selectors = await find_blog_cards()
+                            print(f"    ↻ Re-finding elements after error, {len(card_selectors)} available")
+                            # Don't reset index - continue from where we left off
+                            i += 1
+                        except Exception as refind_error:
+                            print(f"    ✗ Could not re-find elements: {refind_error}")
+                            i += 1  # Move to next card
+                        continue
+                await browser.close()
+                return items
+        except Exception as e:
+            print(f"Error scraping listing page {url}: {e}")
+            return []
+
+    async def _scrape_full_blog_post(self, url: str, user_id: str) -> dict:
+        """Visit a blog post URL and extract the full content and title."""
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                await page.set_extra_http_headers({'User-Agent': USER_AGENT})
+                await page.goto(url, wait_until='networkidle', timeout=REQUEST_TIMEOUT * 1000)
+                await page.wait_for_timeout(2000)
+                html = await page.content()
+                await browser.close()
+                data = self._parse_html(html, url)
+                if not data or not data.get('content'):
+                    return None
+                data['source_url'] = url
+                data['user_id'] = user_id
+                data['content_type'] = 'blog'
+                data['author'] = data.get('author', '')
+                return data
+        except Exception as e:
+            print(f"Error scraping blog post {url}: {e}")
+            return None 
