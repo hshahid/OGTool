@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Main entry point for the web scraper.
+Main entry point for the unified scraper.
 Takes team_id, user_id, and URLs as input and orchestrates the scraping process.
+Handles both websites and PDFs automatically.
 """
 
 import asyncio
 import json
 import sys
 from typing import List, Dict, Any
-from scraper import WebScraper
+from unified_scraper import UnifiedScraper
 from url_processor import URLProcessor
 from output_formatter import OutputFormatter
 
@@ -23,12 +24,12 @@ async def main():
     user_id = sys.argv[2]
     urls = sys.argv[3:]
     
-    print(f"Starting scrape for team: {team_id}, user: {user_id}")
+    print(f"Starting unified scrape for team: {team_id}, user: {user_id}")
     print(f"URLs to process: {len(urls)}")
     
     # Initialize components
     url_processor = URLProcessor(max_pages=1)  # Limit to 1 page deep
-    scraper = WebScraper()
+    scraper = UnifiedScraper()
     formatter = OutputFormatter()
     
     # Process URLs to get individual page URLs
@@ -41,16 +42,9 @@ async def main():
     
     print(f"Total pages to scrape: {len(all_page_urls)}")
     
-    # Scrape all pages
-    scraped_items = []
-    for i, url in enumerate(all_page_urls, 1):
-        print(f"Scraping {i}/{len(all_page_urls)}: {url}")
-        try:
-            item = await scraper.scrape_page(url, user_id)
-            if item:
-                scraped_items.append(item)
-        except Exception as e:
-            print(f"Error scraping {url}: {e}")
+    # Scrape all pages using unified scraper
+    async with scraper:
+        scraped_items = await scraper.scrape_multiple_urls(all_page_urls, user_id)
     
     # Format output
     output = formatter.format_output(team_id, scraped_items)
