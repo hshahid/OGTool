@@ -5,7 +5,7 @@ Test script for PDF scraping functionality.
 
 import asyncio
 import json
-from unified_scraper import UnifiedScraper
+from main import IntelligentScraper
 
 
 async def test_pdf_scraping():
@@ -16,10 +16,10 @@ async def test_pdf_scraping():
     
     print(f"Testing PDF scraping with URL: {test_url}")
     
-    # Initialize unified scraper
-    async with UnifiedScraper() as scraper:
+    # Initialize intelligent scraper
+    async with IntelligentScraper() as scraper:
         # Test URL detection
-        is_pdf = scraper.is_pdf_url(test_url)
+        is_pdf = scraper.pdf_scraper.is_pdf_url(test_url)
         is_gdrive = scraper.google_drive_handler.is_google_drive_url(test_url)
         
         print(f"Is PDF URL: {is_pdf}")

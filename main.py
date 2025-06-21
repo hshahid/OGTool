@@ -9,7 +9,6 @@ import asyncio
 import json
 import sys
 from typing import List, Dict, Any
-from unified_scraper import UnifiedScraper
 from url_processor import URLProcessor
 from output_formatter import OutputFormatter
 from scraper import WebScraper
@@ -65,70 +64,6 @@ class IntelligentScraper:
         
         # Default: treat as simple website
         return "simple_website"
-    
-    async def analyze_page_complexity(self, url: str) -> str:
-        """Dynamically analyze a webpage to determine if it needs complex scraping."""
-        try:
-            # First, try simple HTML scraping
-            content = await self.web_scraper._scrape_html(url)
-            
-            if not content or not content.get('content'):
-                # If simple scraping failed, it might need JavaScript
-                return "complex_website"
-            
-            # Analyze the content to see if it's a listing page
-            html_content = content.get('content', '')
-            
-            # Check for indicators of a listing page that needs card clicking
-            complex_indicators = [
-                'read more', 'continue reading', 'full article',
-                'click to read', 'view post', 'expand', 'show more'
-            ]
-            
-            # Count complex indicators (require card clicking)
-            complex_count = sum(1 for indicator in complex_indicators 
-                              if indicator.lower() in html_content.lower())
-            
-            # If we find multiple complex indicators, it needs card clicking
-            if complex_count >= 5:  # Very high threshold to avoid false positives
-                return "complex_website"
-            
-            # Check for multiple clickable elements that might be blog cards
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html_content, 'html.parser')
-            
-            # Look for elements that suggest truncated content (need card clicking)
-            truncated_elements = soup.find_all(['a', 'button', 'div'], 
-                                             string=lambda text: text and any(phrase in text.lower() 
-                                                                             for phrase in ['read more', 'continue', 'expand']))
-            
-            if len(truncated_elements) >= 5:  # High threshold
-                return "complex_website"
-            
-            # Look for multiple clickable elements with similar structure
-            clickable_elements = soup.find_all(['a', 'button', 'div'], 
-                                             class_=lambda x: x and any(word in x.lower() 
-                                                                       for word in ['card', 'post', 'article', 'item']))
-            
-            # Only consider it complex if there are many clickable elements AND they seem to be truncated
-            if len(clickable_elements) >= 10:  # Very high threshold
-                # Check if these elements contain truncated content
-                has_truncated_content = any(
-                    '...' in elem.get_text() or 
-                    len(elem.get_text().strip()) < 100  # Very short content suggests truncation
-                    for elem in clickable_elements[:5]  # Check first 5 elements
-                )
-                
-                if has_truncated_content:
-                    return "complex_website"
-            
-            # Default to simple website (can be handled with basic HTML scraping)
-            return "simple_website"
-            
-        except Exception as e:
-            print(f"⚠️ Error analyzing page complexity: {e}")
-            # If analysis fails, default to simple website to be faster
-            return "simple_website"
     
     async def scrape_url(self, url: str, user_id: str) -> List[Dict[str, Any]]:
         """Scrape a URL using the most appropriate strategy."""
